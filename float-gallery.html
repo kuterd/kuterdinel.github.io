@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Float Gallery</title>
+<meta name="description" content="Interactive visualization of various floating point formats.">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-7BCXXHYNCD"></script>
+<script>
+	window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-7BCXXHYNCD');
+</script>
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        padding-left: 20px;
+    }
+    .float-viz {
+        border-collapse: collapse;
+        font-family: monospace;
+    }
+
+    .toggle-bit {
+        cursor: pointer;
+    }
+
+    .toggle-bit:hover {
+        background-color: lightyellow !important;
+    }
+
+</style>
+
+<script>
+
+function float_to_int32(x) {
+    let buf = new ArrayBuffer(4);
+    let f32 = new Float32Array(buf);
+    let i32 = new Int32Array(buf);
+    f32[0] = x;
+    return i32[0];
+}
+
+function int32_to_float(x) {
+    let buf = new ArrayBuffer(4);
+    let f32 = new Float32Array(buf);
+    let i32 = new Int32Array(buf);
+    i32[0] = x;
+    return f32[0];
+}
+
+class FloatFormat {
+    constructor(len_exponent, len_mantissa) {
+        this.len_mantissa = len_mantissa;
+        this.len_exponent = len_exponent;
+    }
+
+    bit_length() {
+        return 1 + this.len_mantissa + this.len_exponent;
+    }
+
+    exponent_bias() {
+        return (1 << (this.len_exponent - 1)) - 1;
+    }
+
+    min_exponent() {
+        return 1 - this.exponent_bias();
+    }
+
+    max_exponent() {
+        return (1 << this.len_exponent) - 2 - this.exponent_bias();
+    }
+
+    unpack(x) {
+        let sign = x >> (this.len_mantissa + this.len_exponent);
+        let mantissa = x & ((1 << this.len_mantissa) - 1);
+        let exponent = (x >> this.len_mantissa) & ((1 << this.len_exponent) - 1);
+
+        return [sign, exponent, mantissa];
+    }
+
+    pack(sign, exponent, mantissa) {
+        return (sign << (this.len_mantissa + this.len_exponent)) | (exponent << this.len_mantissa) | mantissa;
+    }
+
+    exponent_value(x) {
+        if (this.is_subnormal(x)) {
+            return this.min_exponent();
+        }
+
+        let [sign, exponent, mantissa] = this.unpack(x);
+        let bias = this.exponent_bias();
+        return exponent - bias;        
+    }
+
+    is_nan(x) {
+        let [sign, exponent, mantissa] = this.unpack(x);
+        return exponent == (1 << this.len_exponent) - 1 && mantissa != 0;
+    }
+
+    is_inf(x) {
+        let [sign, exponent, mantissa] = this.unpack(x);
+        return exponent == (1 << this.len_exponent) - 1 && mantissa == 0;
+    }
+    
+    is_zero(x) {
+        let [sign, exponent, mantissa] = this.unpack(x);
+        return exponent == 0 && mantissa == 0;
+    }
+
+    is_positive(x) {
+        let [sign, exponent, mantissa] = this.unpack(x);
+        return sign == 0;
+    }
+
+    is_subnormal(x) {
+        let [sign, exponent, mantissa] = this.unpack(x);
+        return exponent == 0 && mantissa != 0;
+    }
+
+    max_value(sign) {
+        return this.pack(sign, this.max_exponent() + this.exponent_bias(), (1 << this.len_mantissa) - 1);
+    }
+
+    to_float32(x) {
+        if (this.is_nan(x)) {
+            return NaN;
+        }
+
+        if (this.is_inf(x)) {
+            return this.is_positive(x) ? Infinity : -Infinity;
+        }
+        
+        if (this.is_zero(x)) {
+            return this.is_positive(x) ? 0.0 : -0.0;
+        }
+
+        let [sign, exponent, mantissa] = this.unpack(x);
+        exponent -= this.exponent_bias();
+        
+        if (this.is_subnormal(x)) {
+            let l = Math.clz32(mantissa) - (32 - this.len_mantissa) + 1;
+            exponent = this.min_exponent() - l;
+            mantissa <<= l + 1;
+            mantissa &= (1 << this.len_mantissa) - 1;
+        }
+
+        if (exponent < Float32.min_exponent()) {
+            let shift = Float32.min_exponent() - exponent;
+            mantissa >>= shift;
+            
+            // add back the implicit 1.
+            mantissa |= 1 << (this.len_mantissa - (Float32.min_exponent() - exponent));
+            
+            exponent = Float32.min_exponent() - 1;
+        }
+
+        exponent += Float32.exponent_bias();
+        
+        x = Float32.pack(sign, exponent, mantissa << (23 - this.len_mantissa));
+        
+        return int32_to_float(x);
+    }
+
+    from_float32(f) {
+        // Some formats may implement special values differently.
+        if (isNaN(f)) {
+            return this.pack(0, (1 << this.len_exponent) - 1, 1);
+        }
+
+        if (f == Infinity || f == -Infinity) {
+            return this.pack(f < 0, (1 << this.len_exponent) - 1, 0);
+        }
+
+        return this._from_float32(f);
+    }
+    
+    _from_float32(f) {
+        let x = float_to_int32(f);
+
+        let [sign, exponent, mantissa] = Float32.unpack(x);
+        exponent -= Float32.exponent_bias();
+        if (Float32.is_subnormal(x)) {
+            // normalize subnormal.
+            let l = Math.clz32(Float32.mantissa(x)) - (32 - Float32.len_mantissa) + 1;
+            exponent = Float32.min_exponent() - l;
+            mantissa <<= l + 1;
+            mantissa &= (1 << Float32.len_mantissa) - 1;
+        }
+
+        if (exponent < this.min_exponent()) {
+            // denormalize.
+            let shift = this.min_exponent() - exponent;
+            // this will round towards zero.
+            mantissa >>= shift;
+            exponent = this.min_exponent() - 1;
+        }
+        console.log("exp", this.max_exponent(), exponent)
+        if (exponent > this.max_exponent()) {
+            console.log("overflow");
+            // exponent bigger than what we can represent, return max.
+            return this.max_value(sign);
+        }
+
+        exponent += this.exponent_bias();
+        x = this.pack(sign, exponent, mantissa >> (23 - this.len_mantissa));
+
+        return x;
+    }
+}
+
+// Used for OCP FP8 E4M3 format.
+class CompactOCPFloatFormat extends FloatFormat {
+    constructor(len_exponent, len_mantissa) {
+        super(len_exponent, len_mantissa);
+    }
+
+    is_nan(x) {
+        let [sign, exponent, mantissa] = this.unpack(x);
+        return exponent == (1 << this.len_exponent) - 1 && mantissa == (1 << this.len_mantissa) - 1;
+    }
+
+    from_float32(f) {
+        if (isNaN(f)) {
+            return this.pack(0, (1 << this.len_exponent) - 1, (1 << this.len_mantissa) - 1);
+        }
+
+        if (f == Infinity || f == -Infinity) {
+            // not possible to represent infinity, so just return the largest value.
+            return this.pack(f < 0, (1 << this.len_exponent) - 1, (1 << this.len_mantissa) - 2);
+        }
+
+        return this._from_float32(f);
+    }
+
+    is_inf(x) {
+        return false;
+    }
+}
+
+class FNUZFloat extends FloatFormat {
+    constructor(len_exponent, len_mantissa) {
+        super(len_exponent, len_mantissa);
+    }
+
+    from_float32(f) {
+        if (isNaN(f)) {
+            return this.pack(1, 0, 0);
+        }
+
+        if (f == Infinity || f == -Infinity) {
+            // not possible to represent infinity, so just return the largest value.
+            return this.max_value(f < 0);
+        }
+
+        return this._from_float32(f);
+    }
+
+    max_exponent() {
+        return (1 << this.len_exponent) - 2 - this.exponent_bias();
+    }
+
+    is_nan(x) {
+        let [sign, exponent, mantissa] = this.unpack(x);
+        return sign != 0 && exponent == 0 && mantissa == 0;
+    }
+
+    is_inf(x) {
+        return false;
+    }
+}
+
+class OCPFP4 extends FloatFormat {
+    constructor() {
+        super(2,1);
+    }
+
+    from_float32(f) {
+        // Not possible to represent NaN.
+        if (isNaN(f)) {
+            return 0;
+        }
+
+        // not possible to represent infinity, so just return the largest value.
+        if (f == Infinity || f == -Infinity) {
+            return this.pack(f < 0, (1 << this.len_exponent) - 1, (1 << this.len_mantissa) - 1);
+        }
+
+        return this._from_float32(f);
+    }
+
+    max_exponent() {
+        return (1 << this.len_exponent) - 1 - this.exponent_bias();
+    }
+
+    
+    is_nan(x) {
+        return false;
+    }
+
+    is_inf(x) {
+        return false;
+    }
+}
+
+function render_table(format, x, update) {
+    const table = document.createElement('table');
+    const [sign, exponent, mantissa] = format.unpack(x);
+
+    function append_row() {
+        const row = document.createElement('tr');
+        table.appendChild(row);
+        return row;
+    }
+
+    function append_cell(row, text, color = null, type = "td") {
+        const cell = document.createElement(type);
+        if (color) {
+            cell.style.backgroundColor = color;
+        }
+        cell.textContent = text;
+        row.appendChild(cell);
+
+        return cell;
+    }
+
+    function toggle_bit_(start) {
+        return function (start, i) {
+            x ^= 1 << start + i;
+            update(x);
+        }.bind(null, start);
+    }
+
+    function append_bits(row, num, len, color, bit_toggle) {
+        for (let i = len - 1; i >= 0; i--) {
+           cell = append_cell(row, (num >> i) & 1, color, "td");
+           cell.onclick = function(i, event) {
+            bit_toggle(i);
+           }.bind(null, i);
+
+           cell.className = "toggle-bit";
+           cell.style.padding = "5px";
+        }
+    }
+
+    let header = append_row();
+    for (var i = format.bit_length() - 1; i >= 0; i--) {
+        var cell = append_cell(header, i, "lightgray", "th");
+        cell.style.fontSize = "10px";
+    }
+
+
+    let row = append_row();
+    append_bits(row, sign, 1, "gray", toggle_bit_(format.len_mantissa + format.len_exponent));
+    append_bits(row, exponent, format.len_exponent, "lightblue", toggle_bit_(format.len_mantissa));
+    append_bits(row, mantissa, format.len_mantissa, "lightgreen", toggle_bit_(0));
+    table.className = "float-viz";
+
+    return table;
+}
+
+function visualize_format(parent_id, format, x) {
+    var parent_el = document.getElementById(parent_id);
+
+    var bottom = document.createElement('p');
+
+    var info_el = document.createElement('span');
+    info_el.style.marginLeft = "10px";
+
+    var value_el = document.createElement('input');
+    value_el.type = "text";
+    value_el.size = 30;
+    last_val = null;
+
+    value_el.onkeyup = function() {
+        let f = parseFloat(value_el.value);
+        x = format.from_float32(f);
+
+        update(x, false);
+    };
+
+    value_el.addEventListener('focusout', function() {
+        value_update(last_val);
+    });
+    
+    function value_update(x) {
+        value_el.value = format.to_float32(x);
+    }
+
+    function info_update(x) {
+        let exponent = format.exponent_value(x);
+        note = format.is_subnormal(x) ? "(Subnormal)" : "";
+        info_el.innerHTML = " ";
+        if (!format.is_zero(x) && !format.is_inf(x) && !format.is_nan(x)) {
+            info_el.innerHTML = `Exponent: ${exponent} ${note}`;
+        }
+    }
+
+    let table = null;
+    function update(x, do_update = true) {
+        last_val = x;
+        _table = render_table(format, x, update);
+        parent_el.replaceChild(_table, table);
+        table = _table;
+        if (do_update) {
+            value_update(x);
+        }
+
+        info_update(x);
+    };
+
+    table = render_table(format, x, update);
+    parent_el.appendChild(table);
+    bottom.appendChild(value_el);
+    bottom.appendChild(info_el);
+    parent_el.appendChild(bottom);
+
+    value_update(x);
+    info_update(x);
+}
+
+
+Float32 = new FloatFormat(8, 23);
+TFloat32 = new FloatFormat(8, 10);
+Float16 = new FloatFormat(5, 10);
+BFloat16 = new FloatFormat(8, 7);
+
+OCP_FP8_E4M3 = new CompactOCPFloatFormat(4, 3);
+console.assert(OCP_FP8_E4M3.exponent_bias() == 7, "OCP_FP8_E4M3.exponent_bias() == 7");
+
+OCP_FP8_E5M2 = new FloatFormat(5, 2);
+console.assert(OCP_FP8_E5M2.exponent_bias() == 15, "OCP_FP8_E5M2.exponent_bias() == 15");
+
+FP8_E4M3_FNUZ = new FNUZFloat(4, 3);
+FP8_E5M2_FNUZ = new FNUZFloat(5, 2);
+
+OCP_FP4 = new OCPFP4();
+
+document.addEventListener("DOMContentLoaded", function() {
+    visualize_format("float32-visual",Float32, 0);
+    visualize_format("tfloat32-visual", TFloat32, 0);
+
+    visualize_format("float16-visual", Float16, 0);
+    visualize_format("bfloat16-visual", BFloat16, 0);
+
+    visualize_format("ocp-fp8-e4m3-visual", OCP_FP8_E4M3, 0);
+    visualize_format("ocp-fp8-e5m2-visual", OCP_FP8_E5M2, 0);
+
+    visualize_format("fp8-e4m3-fnuz-visual", FP8_E4M3_FNUZ, 0);
+    visualize_format("fp8-e5m2-fnuz-visual", FP8_E5M2_FNUZ, 0);
+
+    visualize_format("ocp-fp4-visual", OCP_FP4, 0);
+});
+</script>
+</head>
+<body>
+    <h1>Float Gallery</h1>
+    <p>Interactive visualization of various floating point formats.</p>
+    <p>You can click on the bits to toggle them or use the input box to enter a floating point number</p>
+
+    <div id="float32-visual">
+        <h3>Float32</h3>
+        <p>
+            Good old IEEE 754 32-bit floating point number.
+        </p>
+    </div>
+    <div id="tfloat32-visual">
+        <h3>TensorFloat32</h3>
+        <p>
+            More info on <a href="https://blogs.nvidia.com/blog/tensorfloat-32-precision-format/">TensorFloat-32</a> 
+        </p>
+    </div>
+    <div id="float16-visual">
+        <h3>Float16</h3>
+        <p>
+            IEEE 754 half percision floating point number.
+        </p>
+    </div>
+
+    <div id="bfloat16-visual">
+        <h3>BFloat16</h3>
+        <p>
+            <a href="https://en.wikipedia.org/wiki/Bfloat16_floating-point_format">BFloat16</a> has larger range than float16 but less precision. Invented by Google Brain.
+        </p>
+    </div>
+
+    <div id="ocp-fp8-e4m3-visual">
+        <h3>OCP FP8 E4M3</h3>
+        <p>
+            OCP FP8 E4M3 is a compact floating point format with 4-bit exponent and 3-bit mantissa. Doesn't support infinity.
+            <a href="https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-12-01-pdf-1">OCP FP8 Specification.</a>
+        </p>
+    </div>
+
+    <div id="ocp-fp8-e5m2-visual">
+        <h3>OCP FP8 E5M2</h3>
+        <p>
+            OCP FP8 E5M2 is a compact floating point format with 5-bit exponent and 2-bit mantissa.
+            <a href="https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-12-01-pdf-1">OCP FP8 Specification.</a>
+        </p>
+    </div>
+
+    <div id="fp8-e4m3-fnuz-visual">
+        <h3>FP8 E4M3 FNUZ</h3>
+        <p>
+            FP8 E4M3 FNUZ is a floating point format with 4-bit exponent and 3-bit mantissa. It has a special encoding for NaN and doesn't support infinity.
+        </p>
+    </div>
+
+    <div id="fp8-e5m2-fnuz-visual">
+        <h3>FP8 E5M2 FNUZ</h3>
+        <p>
+            FP8 E5M2 FNUZ is a floating point format with 5-bit exponent and 2-bit mantissa. It has a special encoding for NaN and doesn't support infinity.
+        </p>
+    </div>
+
+    <div id="ocp-fp4-visual">
+        <h3>OCP FP4</h3>
+        <p>
+            OCP FP4 is a floating point format with 2-bit exponent and 1-bit mantissa. Doesn't support NaN or infinity.
+            <a href="https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf">OCP Microscaling Formats Specification</a>
+        </p>
+    </div>
+
+</body>
+</html>
