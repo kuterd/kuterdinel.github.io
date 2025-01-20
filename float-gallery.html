@@ -140,11 +140,12 @@ class FloatFormat {
         if (this.is_subnormal(x)) {
             let l = Math.clz32(mantissa) - (32 - this.len_mantissa) + 1;
             exponent = this.min_exponent() - l;
-            mantissa <<= l + 1;
+            mantissa <<= l;
             mantissa &= (1 << this.len_mantissa) - 1;
         }
 
         if (exponent < Float32.min_exponent()) {
+            // denormalize.
             let shift = Float32.min_exponent() - exponent;
             mantissa >>= shift;
             
@@ -269,9 +270,11 @@ class FNUZFloat extends FloatFormat {
     }
 }
 
-class OCPFP4 extends FloatFormat {
-    constructor() {
-        super(2,1);
+
+// OCP FP4/FP6 formats.
+class OCPFP46 extends FloatFormat {
+    constructor(len_exponent, len_mantissa) {
+        super(len_exponent, len_mantissa);
     }
 
     from_float32(f) {
@@ -289,9 +292,9 @@ class OCPFP4 extends FloatFormat {
     }
 
     max_exponent() {
+        // max exponent is higher than usual becuase we don't support infinity or nan.
         return (1 << this.len_exponent) - 1 - this.exponent_bias();
     }
-
     
     is_nan(x) {
         return false;
@@ -433,7 +436,9 @@ console.assert(OCP_FP8_E5M2.exponent_bias() == 15, "OCP_FP8_E5M2.exponent_bias()
 FP8_E4M3_FNUZ = new FNUZFloat(4, 3);
 FP8_E5M2_FNUZ = new FNUZFloat(5, 2);
 
-OCP_FP4 = new OCPFP4();
+OCP_FP4 = new OCPFP46(2, 1);
+OCP_FP6_E2M3 = new OCPFP46(2, 3);
+OCP_FP6_E3M2 = new OCPFP46(3, 2);
 
 document.addEventListener("DOMContentLoaded", function() {
     visualize_format("float32-visual",Float32, 0);
@@ -449,6 +454,8 @@ document.addEventListener("DOMContentLoaded", function() {
     visualize_format("fp8-e5m2-fnuz-visual", FP8_E5M2_FNUZ, 0);
 
     visualize_format("ocp-fp4-visual", OCP_FP4, 0);
+    visualize_format("ocp-fp6-e2m3", OCP_FP6_E2M3, 0);
+    visualize_format("ocp-fp6-e3m2", OCP_FP6_E3M2, 0);
 });
 </script>
 </head>
@@ -512,6 +519,21 @@ document.addEventListener("DOMContentLoaded", function() {
             FP8 E5M2 FNUZ is a floating point format with 5-bit exponent and 2-bit mantissa. It has a special encoding for NaN and doesn't support infinity.
         </p>
     </div>
+    <div id="ocp-fp6-e2m3">
+        <h3>OCP FP6 E2M3</h3>
+        <p>
+        OCP FP6 E2M3 is a floating point format with 2-bit exponent and 3-bit mantissa. Doesn't support NaN or infinity.
+        <a href="https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf">OCP Microscaling Formats Specification</a>
+        </p>
+    </div>
+
+    <div id="ocp-fp6-e3m2">
+        <h3>OCP FP6 E3M2</h3>
+        <p>
+        OCP FP6 E3M2 is a floating point format with 3-bit exponent and 2-bit mantissa. Doesn't support NaN or infinity.
+        <a href="https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf">OCP Microscaling Formats Specification</a>
+        </p>
+    </div>
 
     <div id="ocp-fp4-visual">
         <h3>OCP FP4</h3>
@@ -520,6 +542,7 @@ document.addEventListener("DOMContentLoaded", function() {
             <a href="https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf">OCP Microscaling Formats Specification</a>
         </p>
     </div>
+
 
 </body>
 </html>
